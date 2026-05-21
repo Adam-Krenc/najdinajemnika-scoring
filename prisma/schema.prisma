@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Owner {
+  id        String    @id @default(cuid())
+  name      String
+  email     String    @unique
+  phone     String
+  createdAt DateTime  @default(now())
+  listings  Listing[]
+}
+
+model Listing {
+  id             String      @id @default(cuid())
+  ownerId        String
+  owner          Owner       @relation(fields: [ownerId], references: [id])
+  street         String
+  city           String
+  zip            String
+  size           String
+  rent           Int
+  availableFrom  DateTime
+  description    String?
+  maxPersons     Int         @default(2)
+  petsAllowed    String      @default("domluva")
+  smokingAllowed Boolean     @default(false)
+  tenantPref     String      @default("bez preference")
+  status         String      @default("new")
+  photos         String[]
+  adHeadline     String?
+  adText         String?
+  adStatus       String      @default("pending")
+  contactPhone   String?
+  createdAt      DateTime    @default(now())
+  applicants     Applicant[]
+}
+
+model Applicant {
+  id              String   @id @default(cuid())
+  listingId       String
+  listing         Listing  @relation(fields: [listingId], references: [id])
+  name            String
+  email           String
+  phone           String
+  message         String?
+  income          Int?
+  employment      String?
+  personsCount    Int?
+  hasPets         Boolean  @default(false)
+  previousAddress String?
+  scoringReason   String?
+  score           Int?
+  status          String   @default("new")
+  gdprConsent     Boolean  @default(false)
+  registryConsent Boolean  @default(false)
+  createdAt       DateTime @default(now())
+}
