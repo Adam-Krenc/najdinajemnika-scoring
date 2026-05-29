@@ -8,6 +8,12 @@ import {
 
 const client = new Anthropic();
 
+function extractJSON(text: string): string {
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (match) return match[1].trim();
+  return text.trim();
+}
+
 export async function scoreApplicant(input: ScoringInput): Promise<ScoringResult> {
   const message = await client.messages.create({
     model: "claude-haiku-4-5",
@@ -19,7 +25,7 @@ export async function scoreApplicant(input: ScoringInput): Promise<ScoringResult
   const text = (message.content[0] as { type: string; text: string }).text;
 
   try {
-    const result = JSON.parse(text) as ScoringResult;
+    const result = JSON.parse(extractJSON(text)) as ScoringResult;
     // Clamp score to 0-100
     result.score = Math.max(0, Math.min(100, Math.round(result.score)));
     return result;
