@@ -2,6 +2,8 @@ import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { scoreApplicant } from "../scoring/claude";
 import { generateAd } from "../ads/generateAd";
+import { lookupIsir } from "../isir/lookup";
+import { sendIsirResults } from "../isir/email";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -97,6 +99,85 @@ router.post("/generate-ad", async (req: Request, res: Response) => {
     await prisma.listing.update({
       where: { id: listingId },
       data: { adStatus: "error" },
+    }).catch(() => {});
+  }
+});
+
+const PACKAGE_LABELS: Record<string, string> = {
+  basic: "Základní (ISIR)",
+  complete: "Kompletní (ISIR + CEE)",
+  deep: "Hloubkové prověření",
+};
+
+// POST /webhook/isir — automatická ISIR kontrola po souhlasu nájemníka
+router.post("/isir", async (req: Request, res: Response) => {
+  if (!verifySecret(req, res)) return;
+
+  const { verificationId } = req.body;
+
+  if (!verificationId || typeof verificationId !== "string") {
+    res.status(400).json({ error: "Chybí verificationId" });
+    return;
+  }
+
+  const verification = await prisma.verification.findUnique({
+    where: { id: verificationId },
+  }).catch(() => null);
+
+  if (!verification) {
+    res.status(404).json({ error: "Verifikace nenalezena" });
+    return;
+  }
+
+  if (verification.status !== "pending_check") {
+    res.status(409).json({ error: `Neočekávaný status: ${verification.status}` });
+    return;
+  }
+
+  console.log(`[isir] Spouštím ISIR lookup pro verification ${verificationId} (${verification.tenantName})`);
+
+  // Odpovědět okamžitě — ISIR lookup běží async
+  res.json({ ok: true, message: "ISIR lookup spuštěn" });
+
+  try {
+    const result = await lookupIsir(verification.tenantName);
+
+    console.log(`[isir] ${verification.tenantName} → ${result.rawResult} (${result.count} záznamů)`);
+
+    const isBasic = verification.package === "basic";
+
+    await prisma.verification.update({
+      where: { id: verificationId },
+      data: {
+        isirResult: result.rawResult,
+        ...(isBasic && {
+          status: "complete",
+          completedAt: new Date(),
+        }),
+      },
+    });
+
+    // Basic balíček: auto-complete → rovnou poslat výsledky pronajímateli
+    if (isBasic) {
+      const packageLabel = PACKAGE_LABELS[verification.package] ?? verification.package;
+      await sendIsirResults({
+        landlordName: verification.landlordName,
+        landlordEmail: verification.landlordEmail,
+        tenantName: verification.tenantName,
+        isirResult: result.rawResult,
+        note: result.note ?? null,
+        packageLabel,
+      });
+      console.log(`[isir] Basic verification ${verificationId} → complete, email odeslán`);
+    } else {
+      // Complete/Deep: ISIR uložen, admin ještě musí zkontrolovat CEE
+      console.log(`[isir] ${verification.package} verification ${verificationId} → ISIR uložen, čeká na CEE`);
+    }
+  } catch (err) {
+    console.error(`[isir] Chyba při ISIR lookup ${verificationId}:`, err);
+    await prisma.verification.update({
+      where: { id: verificationId },
+      data: { isirResult: "error" },
     }).catch(() => {});
   }
 });
