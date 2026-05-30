@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { scoreApplicant } from "../scoring/claude";
 import { generateAd } from "../ads/generateAd";
 import { lookupIsir } from "../isir/lookup";
-import { sendIsirResults } from "../isir/email";
+import { sendIsirResults, sendAdminIsirFallback } from "../isir/email";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -145,7 +145,28 @@ router.post("/isir", async (req: Request, res: Response) => {
     console.log(`[isir] ${verification.tenantName} → ${result.rawResult} (${result.count} záznamů)`);
 
     const isBasic = verification.package === "basic";
+    const packageLabel = PACKAGE_LABELS[verification.package] ?? verification.package;
 
+    if (result.rawResult === "error") {
+      // ISIR nedostupný (pravděpodobně blokace VPS IP) → admin musí zkontrolovat ručně
+      await prisma.verification.update({
+        where: { id: verificationId },
+        data: { isirResult: "error" },
+      });
+      await sendAdminIsirFallback({
+        verificationId,
+        landlordName: verification.landlordName,
+        landlordEmail: verification.landlordEmail,
+        tenantName: verification.tenantName,
+        tenantEmail: verification.tenantEmail,
+        packageLabel,
+        isirNote: result.note,
+      });
+      console.log(`[isir] ISIR error pro ${verificationId} → admin notifikován`);
+      return;
+    }
+
+    // ISIR úspěšně zkontrolován
     await prisma.verification.update({
       where: { id: verificationId },
       data: {
@@ -157,9 +178,8 @@ router.post("/isir", async (req: Request, res: Response) => {
       },
     });
 
-    // Basic balíček: auto-complete → rovnou poslat výsledky pronajímateli
     if (isBasic) {
-      const packageLabel = PACKAGE_LABELS[verification.package] ?? verification.package;
+      // Basic: auto-complete → výsledky rovnou pronajímateli
       await sendIsirResults({
         landlordName: verification.landlordName,
         landlordEmail: verification.landlordEmail,
@@ -168,10 +188,10 @@ router.post("/isir", async (req: Request, res: Response) => {
         note: result.note ?? null,
         packageLabel,
       });
-      console.log(`[isir] Basic verification ${verificationId} → complete, email odeslán`);
+      console.log(`[isir] Basic ${verificationId} → complete (${result.rawResult}), email odeslán`);
     } else {
-      // Complete/Deep: ISIR uložen, admin ještě musí zkontrolovat CEE
-      console.log(`[isir] ${verification.package} verification ${verificationId} → ISIR uložen, čeká na CEE`);
+      // Complete/Deep: ISIR uložen, admin dokončí CEE
+      console.log(`[isir] ${verification.package} ${verificationId} → ISIR ${result.rawResult}, čeká na CEE`);
     }
   } catch (err) {
     console.error(`[isir] Chyba při ISIR lookup ${verificationId}:`, err);

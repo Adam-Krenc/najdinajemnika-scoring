@@ -1,5 +1,7 @@
 import { Resend } from "resend";
 
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://www.najdinajemnika.cz";
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const RESULT_LABELS: Record<string, string> = {
@@ -49,6 +51,48 @@ export async function sendIsirResults(params: {
           Nenahrazuje právní poradenství. Všechna data jsou zpracována v souladu s GDPR.
         </p>
         <p style="color: #6b7280; font-size: 14px; margin-top: 32px;">© 2025 NajdiNájemníka.cz</p>
+      </div>
+    `,
+  });
+}
+
+export async function sendAdminIsirFallback(params: {
+  verificationId: string;
+  landlordName: string;
+  landlordEmail: string;
+  tenantName: string;
+  tenantEmail: string;
+  packageLabel: string;
+  isirNote?: string;
+}) {
+  const { verificationId, landlordName, landlordEmail, tenantName, tenantEmail, packageLabel, isirNote } = params;
+  const adminUrl = `${BASE_URL}/admin/verifications/${verificationId}`;
+
+  await resend.emails.send({
+    from: "NajdiNájemníka.cz <obchod@smartapky.cz>",
+    to: "obchod@smartapky.cz",
+    subject: `[Ověření – ISIR ruční] ${tenantName}`,
+    html: `
+      <div style="font-family: Inter, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
+        <h1 style="color: #1a56db; font-size: 20px;">Ověření ke zpracování (ISIR nedostupný automaticky)</h1>
+        <p style="color: #374151;">Nájemník udělil souhlas, ale automatická ISIR kontrola selhala. Proveďte kontrolu ručně.</p>
+        ${isirNote ? `<p style="color: #92400e; background: #fefce8; padding: 10px; border-radius: 6px;">${isirNote}</p>` : ""}
+        <div style="background: #f9fafb; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 4px 0;"><strong>ID:</strong> ${verificationId}</p>
+          <p style="margin: 4px 0;"><strong>Balíček:</strong> ${packageLabel}</p>
+          <p style="margin: 4px 0;"><strong>Pronajímatel:</strong> ${landlordName} (${landlordEmail})</p>
+          <p style="margin: 4px 0;"><strong>Nájemník:</strong> ${tenantName} (${tenantEmail})</p>
+        </div>
+        <div style="background: #fefce8; border-radius: 8px; padding: 12px 16px; margin: 16px 0;">
+          <p style="margin: 0; color: #92400e; font-weight: 600;">Co zkontrolovat:</p>
+          <p style="margin: 4px 0; color: #78350f;">• ISIR: <a href="https://isir.justice.cz/isir/common/index.do" style="color: #1a56db;">isir.justice.cz</a></p>
+          <p style="margin: 4px 0; color: #78350f;">• CEE: <a href="https://www.ceecr.cz/" style="color: #1a56db;">ceecr.cz</a></p>
+        </div>
+        <div style="text-align: center; margin: 24px 0;">
+          <a href="${adminUrl}" style="background: #1a56db; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-size: 15px; font-weight: 600; display: inline-block;">
+            Zadat výsledky v adminu
+          </a>
+        </div>
       </div>
     `,
   });
