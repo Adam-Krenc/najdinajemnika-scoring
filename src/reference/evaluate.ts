@@ -23,7 +23,7 @@ Pravidla hodnocení:
 - neutral: bez závažných problémů ale bez nadšení, nebo nedostatečné informace, nebo hovor nebyl dokončen
 - negative: problémy s platbami, poškození bytu, konflikty, výslovné nedoporučení
 
-Pokud přepis je prázdný, krátký nebo nedošlo k érzmnérnérnému rozhovoru → neutral.
+Pokud přepis je prázdný, krátký nebo nedošlo ke smysluplnému rozhovoru → neutral.
 Note musí být stručná věta pro admina, max 100 znaků.`;
 
 export async function evaluateReferenceTranscript(

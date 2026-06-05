@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { scoreApplicant } from "../scoring/claude";
+import { determineScoringStatus } from "../scoring/status";
 import { generateAd } from "../ads/generateAd";
 import { lookupIsir } from "../isir/lookup";
 import { sendIsirResults, sendAdminIsirFallback } from "../isir/email";
@@ -44,9 +45,7 @@ router.post("/score", async (req: Request, res: Response) => {
       applicant: applicantData,
     });
 
-    const SCORE_THRESHOLD = 50;
-    const passed = result.score >= SCORE_THRESHOLD;
-    const newStatus = passed ? "awaiting_reference" : "rejected_ai";
+    const newStatus = determineScoringStatus(result.score);
 
     await prisma.applicant.update({
       where: { id: applicantId },
