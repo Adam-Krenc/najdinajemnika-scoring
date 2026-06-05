@@ -62,6 +62,11 @@ export async function createReferenceCall(params: {
   }
 }
 
+/** Volací okno: hodina spadá do 9:00–16:59 (tj. 9 ≤ hour < 17). Čistá fce — testovatelná. */
+export function isWithinCallHours(hour: number): boolean {
+  return hour >= 9 && hour < 17;
+}
+
 /** Vrátí true pokud je aktuálně 9:00–17:00 pražského času */
 export function isCallHour(): boolean {
   const formatter = new Intl.DateTimeFormat("cs-CZ", {
@@ -70,5 +75,5 @@ export function isCallHour(): boolean {
     hour12: false,
   });
   const hour = parseInt(formatter.format(new Date()), 10);
-  return hour >= 9 && hour < 17;
+  return isWithinCallHours(hour);
 }

@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { scoreApplicant } from "../scoring/claude";
 import { determineScoringStatus } from "../scoring/status";
+import { timingSafeEqualStr } from "../lib/secret";
 import { generateAd } from "../ads/generateAd";
 import { lookupIsir } from "../isir/lookup";
 import { sendIsirResults, sendAdminIsirFallback } from "../isir/email";
@@ -15,8 +16,10 @@ const router = Router();
 const prisma = new PrismaClient();
 
 function verifySecret(req: Request, res: Response): boolean {
-  const secret = req.headers["x-webhook-secret"];
-  if (!process.env.WEBHOOK_SECRET || secret !== process.env.WEBHOOK_SECRET) {
+  const header = req.headers["x-webhook-secret"];
+  // Hlavička může přijít jako string | string[] | undefined.
+  const secret = Array.isArray(header) ? header[0] : header;
+  if (!process.env.WEBHOOK_SECRET || !secret || !timingSafeEqualStr(secret, process.env.WEBHOOK_SECRET)) {
     res.status(401).json({ error: "Unauthorized" });
     return false;
   }
