@@ -47,7 +47,7 @@ async function getToken(): Promise<string> {
   return data.token;
 }
 
-function splitName(fullName: string): { firstName: string; lastName: string } {
+export function splitName(fullName: string): { firstName: string; lastName: string } {
   const parts = fullName.trim().split(/\s+/);
   if (parts.length === 1) return { firstName: "", lastName: parts[0] };
   return {

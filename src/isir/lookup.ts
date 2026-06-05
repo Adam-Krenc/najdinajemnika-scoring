@@ -15,14 +15,14 @@ const HEADERS = {
   "Accept-Language": "cs,en;q=0.5",
 };
 
-function splitName(fullName: string): { jmeno: string; nazev: string } {
+export function splitName(fullName: string): { jmeno: string; nazev: string } {
   const parts = fullName.trim().split(/\s+/);
   if (parts.length === 1) return { jmeno: "", nazev: parts[0] };
   return { jmeno: parts.slice(0, -1).join(" "), nazev: parts[parts.length - 1] };
 }
 
 // Extrahuje počet výsledků z HTML odpovědi ISIR
-function parseIsirResults(html: string): number {
+export function parseIsirResults(html: string): number {
   // ISIR zobrazuje "Počet nalezených záznamů: X" nebo tabulku výsledků
   const countMatch = html.match(/Počet nalezených[^:]*:\s*(\d+)/i);
   if (countMatch) return parseInt(countMatch[1], 10);
@@ -32,7 +32,7 @@ function parseIsirResults(html: string): number {
   return rows ? rows.length : 0;
 }
 
-function isErrorPage(html: string): boolean {
+export function isErrorPage(html: string): boolean {
   return html.includes("Chyba serveru") || html.includes("Error 500") || html.includes("Nedostupný systém");
 }
 
