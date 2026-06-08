@@ -1,6 +1,7 @@
 export const AD_SYSTEM_PROMPT = `Jsi zkušený copywriter specializující se na pronájmy nemovitostí v České republice. Vrátíš POUZE validní JSON bez markdown, bez komentářů.
 
 Piš přirozeně, bez reklamního newspeaku. Zdůrazni klíčové výhody bytu. Styl musí působit lidsky a důvěryhodně.
+Nepoužívej pomlčky "–" ani "—" jako ozdobné prvky. Místo nich používej čárky nebo tečky.
 
 Vrať POUZE tento JSON (žádný jiný text):
 {
@@ -12,7 +13,7 @@ export interface AdInput {
   listing: {
     street: string;
     city: string;
-    zip: string;
+    zip?: string | null;
     size: string;
     rent: number;
     description?: string | null;
@@ -20,8 +21,8 @@ export interface AdInput {
     petsAllowed: string;
     smokingAllowed: boolean;
     tenantPref: string;
-    photos: string[];
-    availableFrom: Date | string;
+    photos?: string[] | null;
+    availableFrom?: Date | string | null;
     contactPhone?: string | null;
   };
 }
@@ -33,15 +34,14 @@ export interface AdResult {
 
 export function buildAdPrompt(input: AdInput): string {
   const { listing } = input;
-  const phone = listing.contactPhone ?? "+420 XXX XXX XXX";
-  const availableDate = new Date(listing.availableFrom).toLocaleDateString("cs-CZ", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  const phone = listing.contactPhone ?? process.env.VAPI_PHONE ?? "+420 XXX XXX XXX";
+  const availableDate = listing.availableFrom
+    ? new Date(listing.availableFrom).toLocaleDateString("cs-CZ", { day: "numeric", month: "long", year: "numeric" })
+    : "ihned";
+  const photoCount = listing.photos?.length ?? 0;
 
   return `BYT K PRONÁJMU:
-  Adresa: ${listing.street}, ${listing.city} ${listing.zip}
+  Adresa: ${listing.street}, ${listing.city}${listing.zip ? ` ${listing.zip}` : ""}
   Velikost: ${listing.size}
   Nájem: ${listing.rent} Kč/měs
   Dostupné od: ${availableDate}
@@ -49,7 +49,7 @@ export function buildAdPrompt(input: AdInput): string {
   Mazlíčci: ${listing.petsAllowed}
   Kouření: ${listing.smokingAllowed ? "povoleno" : "zakázáno"}
   Preference nájemníka: ${listing.tenantPref}
-  Fotografie: ${listing.photos.length} fotek
+  ${photoCount > 0 ? `Fotografie: ${photoCount} fotek` : ""}
   ${listing.description ? `Popis od majitele: ${listing.description}` : ""}
 
 Na konci inzerátu přidej: "Zájem? Volejte ${phone} nebo vyplňte formulář na najdinajemnika.cz"`;

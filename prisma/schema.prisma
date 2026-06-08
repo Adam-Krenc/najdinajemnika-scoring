@@ -35,31 +35,63 @@ model Listing {
   photos         String[]
   adHeadline     String?
   adText         String?
-  adStatus       String      @default("pending")
-  contactPhone   String?
-  createdAt      DateTime    @default(now())
+  adStatus                 String      @default("pending")
+  contactPhone             String?
+  shortlistStripeSessionId String?     @unique
+  shortlistPaidAt          DateTime?
+  createdAt                DateTime    @default(now())
   applicants     Applicant[]
 }
 
 model Applicant {
-  id              String   @id @default(cuid())
-  listingId       String
-  listing         Listing  @relation(fields: [listingId], references: [id])
-  name            String
-  email           String
-  phone           String
-  message         String?
-  income          Int?
-  employment      String?
-  personsCount    Int?
-  hasPets         Boolean  @default(false)
-  previousAddress String?
-  scoringReason   String?
-  score           Int?
-  status          String   @default("new")
-  gdprConsent     Boolean  @default(false)
-  registryConsent Boolean  @default(false)
-  createdAt       DateTime @default(now())
+  id                     String    @id @default(cuid())
+  listingId              String
+  listing                Listing   @relation(fields: [listingId], references: [id])
+  name                   String
+  email                  String
+  phone                  String
+  dateOfBirth            String?
+  householdMembers       Json?
+  message                String?
+  income                 Int?
+  employment             String?
+  incomeProofUrl         String?
+  personsCount           Int?
+  hasPets                Boolean   @default(false)
+  pets                   Json?
+  previousLandlordEmail  String?
+  previousLandlordPhone  String?
+  moveReason             String?
+  currentAddress         String?
+  hasExecutions          Boolean   @default(false)
+  executionDebt          String?
+  executionComment       String?
+  hasInsolvency          Boolean   @default(false)
+  insolvencyDebt         String?
+  insolvencyComment      String?
+  additionalComment      String?
+  // AI scoring
+  score                  Int?
+  scoringReason          String?
+  aiNote                 String?
+  vyjimecny              Boolean   @default(false)
+  // Reference check
+  referenceStatus        String?
+  referenceCallId        String?
+  referenceTranscript    String?
+  referenceResult        String?
+  referenceNote          String?
+  referenceAttempts      Int       @default(0)
+  referenceLastAttemptAt DateTime?
+  // Registry checks
+  ceeResult              String?
+  isirResult             String?
+  registryCheckedAt      DateTime?
+  // Pipeline status
+  status                 String    @default("new")
+  gdprConsent            Boolean   @default(false)
+  registryConsent        Boolean   @default(false)
+  createdAt              DateTime  @default(now())
 }
 
 model Verification {
