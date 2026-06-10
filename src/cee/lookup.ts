@@ -18,7 +18,11 @@ export interface CeeLookupResult {
   note?: string;
 }
 
-/** Získá krátkodobý Bearer token (platný ~60 min) */
+/**
+ * Získá krátkodobý token (IP-vázaný, platný ~5 min).
+ * POZOR: CEE API čeká api_key/api_secret jako QUERY PARAMETRY, ne v těle requestu
+ * (s tělem vrací 5501 "Chybí API KEY!"). Token je v odpovědi pod `data.token_value`.
+ */
 async function getToken(): Promise<string> {
   const apiKey = process.env.CEE_API_KEY;
   const apiSecret = process.env.CEE_API_SECRET;
@@ -27,10 +31,9 @@ async function getToken(): Promise<string> {
     throw new Error("CEE_API_KEY nebo CEE_API_SECRET není nastaven v .env");
   }
 
-  const res = await fetch(`${CEE_BASE}/auth`, {
+  const url = `${CEE_BASE}/auth?api_key=${encodeURIComponent(apiKey)}&api_secret=${encodeURIComponent(apiSecret)}`;
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: apiKey, api_secret: apiSecret }),
     signal: AbortSignal.timeout(10_000),
   });
 
@@ -39,12 +42,13 @@ async function getToken(): Promise<string> {
     throw new Error(`CEE auth selhal: HTTP ${res.status} — ${body}`);
   }
 
-  const data = await res.json() as { token?: string; error?: string };
-  if (!data.token) {
-    throw new Error(`CEE auth: token nebyl vrácen — ${JSON.stringify(data)}`);
+  const json = await res.json() as { data?: { token_value?: string }; status?: number };
+  const token = json.data?.token_value;
+  if (!token) {
+    throw new Error(`CEE auth: token nebyl vrácen — ${JSON.stringify(json)}`);
   }
 
-  return data.token;
+  return token;
 }
 
 export function splitName(fullName: string): { firstName: string; lastName: string } {
@@ -71,8 +75,12 @@ export async function lookupCee(tenantName: string): Promise<CeeLookupResult> {
   try {
     const token = await getToken();
 
-    // Vyhledání subjektu podle jména
-    const searchRes = await fetch(`${CEE_BASE}/subject/search`, {
+    // Vyhledání subjektu podle jména.
+    // Token předáváme jako query param `?token=` (ověřený vzor z /credit) i jako
+    // Bearer hlavičku pro jistotu. POZOR: tělo requestu (type/firstName/lastName)
+    // se nepodařilo ověřit — CEE účet má 0 kreditu, takže reálný /subject/search
+    // nešlo otestovat. Po dobití kreditu ověřit, že formát těla sedí (viz ceecr.cz/dev).
+    const searchRes = await fetch(`${CEE_BASE}/subject/search?token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
