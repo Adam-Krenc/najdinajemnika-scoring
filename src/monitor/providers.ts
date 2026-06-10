@@ -41,6 +41,45 @@ export async function getBrevoSmsCredits(lowThreshold: number): Promise<Provider
   }
 }
 
+/**
+ * CEE (Exekutorská komora) — zbývající placené dotazy z prepaid kreditu.
+ * Auth: POST /api/v4/auth?api_key=&api_secret= (POZOR: query params, ne body!) → data.token_value
+ * Balance: GET /api/v4/credit?token= → data.zbyva_dotazu.placenych, data.credit (Kč)
+ */
+export async function getCeeCredit(lowThresholdQueries: number): Promise<ProviderStatus> {
+  const label = "CEE (exekuce)";
+  const apiKey = process.env.CEE_API_KEY;
+  const apiSecret = process.env.CEE_API_SECRET;
+  if (!apiKey || !apiSecret) return { label, value: "—", low: false, error: "chybí CEE_API_KEY / CEE_API_SECRET" };
+
+  try {
+    const base = "https://www.ceecr.cz/api/v4";
+    const authRes = await fetch(
+      `${base}/auth?api_key=${encodeURIComponent(apiKey)}&api_secret=${encodeURIComponent(apiSecret)}`,
+      { method: "POST", signal: AbortSignal.timeout(12_000) }
+    );
+    const authData = (await authRes.json()) as { data?: { token_value?: string } };
+    const token = authData.data?.token_value;
+    if (!token) return { label, value: "—", low: false, error: `auth selhal (HTTP ${authRes.status})` };
+
+    const creditRes = await fetch(`${base}/credit?token=${encodeURIComponent(token)}`, {
+      signal: AbortSignal.timeout(12_000),
+    });
+    const creditData = (await creditRes.json()) as {
+      data?: { credit?: number; zbyva_dotazu?: { placenych?: number } };
+    };
+    const queries = creditData.data?.zbyva_dotazu?.placenych;
+    const kc = creditData.data?.credit;
+    if (typeof queries !== "number") {
+      return { label, value: "neznámé", low: false };
+    }
+    const kcLabel = typeof kc === "number" ? ` (${kc} Kč)` : "";
+    return { label, value: `${queries} dotazů${kcLabel}`, low: queries < lowThresholdQueries };
+  } catch (err) {
+    return { label, value: "—", low: false, error: String(err) };
+  }
+}
+
 /** Twilio — $ zůstatek účtu. GET /2010-04-01/Accounts/{sid}/Balance.json */
 export async function getTwilioBalance(lowThreshold: number): Promise<ProviderStatus> {
   const label = "Twilio";

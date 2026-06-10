@@ -4,14 +4,15 @@
  * Sledované služby:
  *   - Brevo SMS  (alert < BREVO_SMS_LOW, default 100)
  *   - Twilio     (alert < TWILIO_BALANCE_LOW, default 5 USD)
- *   - Anthropic  (útrata tento měsíc — jen informativně)
- *   - Vapi       (bez veřejného API → týdenní připomínka ruční kontroly)
+ *   - CEE        (alert < CEE_CREDIT_LOW, default 5 placených dotazů)
+ *   - Vapi/Anthropic (bez balance API → týdenní připomínka ruční kontroly)
  */
 import { sendTelegram } from "../lib/telegram";
-import { getBrevoSmsCredits, getTwilioBalance, type ProviderStatus } from "./providers";
+import { getBrevoSmsCredits, getTwilioBalance, getCeeCredit, type ProviderStatus } from "./providers";
 
 const BREVO_SMS_LOW = process.env.BREVO_SMS_LOW ? parseInt(process.env.BREVO_SMS_LOW) : 100;
 const TWILIO_BALANCE_LOW = process.env.TWILIO_BALANCE_LOW ? parseFloat(process.env.TWILIO_BALANCE_LOW) : 5;
+const CEE_CREDIT_LOW = process.env.CEE_CREDIT_LOW ? parseInt(process.env.CEE_CREDIT_LOW) : 5;
 
 const VAPI_DASHBOARD_URL = "https://dashboard.vapi.ai";
 const ANTHROPIC_CONSOLE_URL = "https://console.anthropic.com/settings/usage";
@@ -27,12 +28,13 @@ function line(s: ProviderStatus): string {
  * @param includeWeeklyReminders přidá týdenní připomínky ruční kontroly (Vapi, Anthropic)
  */
 export async function runMonitor(includeWeeklyReminders = false): Promise<string> {
-  const [brevo, twilio] = await Promise.all([
+  const [brevo, twilio, cee] = await Promise.all([
     getBrevoSmsCredits(BREVO_SMS_LOW),
     getTwilioBalance(TWILIO_BALANCE_LOW),
+    getCeeCredit(CEE_CREDIT_LOW),
   ]);
 
-  const statuses = [brevo, twilio];
+  const statuses = [brevo, twilio, cee];
   const lowCount = statuses.filter((s) => s.low).length;
 
   const header = lowCount > 0 ? "⚠️ <b>Kredity — pozor, něco dochází</b>" : "💳 <b>Kredity — denní přehled</b>";
