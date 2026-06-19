@@ -11,6 +11,7 @@ import { createReferenceCall, isCallHour } from "../reference/vapi";
 import { evaluateReferenceTranscript } from "../reference/evaluate";
 import { generateShortlistPdf } from "../pdf/shortlist";
 import type { ShortlistApplicant } from "../pdf/shortlist";
+import { escapeHtml } from "../lib/html";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -240,14 +241,18 @@ async function sendCeeAdminFallback(params: {
   packageLabel: string;
   note?: string;
 }) {
-  const { verificationId, landlordName, landlordEmail, tenantName, packageLabel, note } = params;
+  const { verificationId, landlordEmail, packageLabel } = params;
+  // Tělo e-mailu je HTML → escapujeme uživatelská data.
+  const landlordName = escapeHtml(params.landlordName);
+  const tenantName = escapeHtml(params.tenantName);
+  const note = params.note ? escapeHtml(params.note) : params.note;
   const adminUrl = `${BASE_URL}/admin/verifications/${verificationId}`;
   const { Resend } = await import("resend");
   const resend = new Resend(RESEND_API_KEY);
   await resend.emails.send({
     from: "NajdiNájemníka.cz <obchod@smartapky.cz>",
     to: "obchod@smartapky.cz",
-    subject: `[Ověření – CEE ruční] ${tenantName}`,
+    subject: `[Ověření – CEE ruční] ${params.tenantName}`,
     html: `
       <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;padding:32px;">
         <h1 style="color:#1a56db;font-size:20px;">CEE kontrola – nutný ruční zásah</h1>
@@ -349,9 +354,9 @@ async function runCeeLookup(
     html: `
       <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;padding:32px;">
         <h1 style="color:#1a56db;font-size:24px;margin-bottom:8px;">Výsledky prověření</h1>
-        <p style="color:#374151;font-size:16px;">Dobrý den, ${landlordName},</p>
+        <p style="color:#374151;font-size:16px;">Dobrý den, ${escapeHtml(landlordName)},</p>
         <p style="color:#374151;font-size:16px;">
-          Prověření nájemníka <strong>${tenantName}</strong> (${packageLabel}) bylo dokončeno.
+          Prověření nájemníka <strong>${escapeHtml(tenantName)}</strong> (${packageLabel}) bylo dokončeno.
         </p>
         <div style="background:#f9fafb;border-radius:8px;padding:20px;margin:24px 0;">
           <h2 style="color:#374151;font-size:16px;margin:0 0 12px;">Výsledky kontrol</h2>
@@ -361,8 +366,8 @@ async function runCeeLookup(
           <p style="margin:8px 0;color:#374151;">
             <strong>Centrální evidence exekucí (CEE):</strong>&nbsp;${badge(result.rawResult, ceeLabel)}
           </p>
-          ${result.note ? `<p style="margin-top:12px;color:#6b7280;font-size:13px;">${result.note}</p>` : ""}
-          ${verification?.adminNote ? `<p style="margin-top:8px;color:#374151;"><strong>Poznámka:</strong> ${verification.adminNote}</p>` : ""}
+          ${result.note ? `<p style="margin-top:12px;color:#6b7280;font-size:13px;">${escapeHtml(result.note)}</p>` : ""}
+          ${verification?.adminNote ? `<p style="margin-top:8px;color:#374151;"><strong>Poznámka:</strong> ${escapeHtml(verification.adminNote)}</p>` : ""}
         </div>
         <p style="color:#6b7280;font-size:13px;">
           Informace vychází z veřejných registrů ke dni prověření. Nenahrazuje právní poradenství. GDPR compliant.
@@ -908,9 +913,9 @@ async function sendShortlistEmail(params: {
     html: `
       <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;padding:32px;">
         <h1 style="color:#1a56db;font-size:24px;margin-bottom:8px;">Váš shortlist je připraven!</h1>
-        <p style="color:#374151;font-size:16px;">Dobrý den, ${ownerName},</p>
+        <p style="color:#374151;font-size:16px;">Dobrý den, ${escapeHtml(ownerName)},</p>
         <p style="color:#374151;font-size:16px;">
-          Prošli jsme všechny uchazeče o byt <strong>${listingAddress}</strong> a v příloze najdete
+          Prošli jsme všechny uchazeče o byt <strong>${escapeHtml(listingAddress)}</strong> a v příloze najdete
           shortlist <strong>${applicantCount} nejlepších kandidátů</strong> seřazených od nejlepšího.
         </p>
         <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:24px 0;">

@@ -51,17 +51,23 @@ npx prisma generate
 echo "[6] Buildím TypeScript..."
 npm run build
 
-# 7. Create .env if not exists
+# 7. Create .env template if not exists
+# DŮLEŽITÉ: do gitu NIKDY nepatří skutečné tajné údaje. Tento skript vytvoří
+# pouze ŠABLONU s placeholdery — reálné hodnoty doplňte ručně na serveru
+# (nebo je dodejte přes prostředí CI / secret manager).
 if [ ! -f "$APP_DIR/.env" ]; then
-  echo "[7] Vytvářím .env soubor..."
+  echo "[7] Vytvářím šablonu .env (doplňte skutečné hodnoty)..."
   cat > "$APP_DIR/.env" << 'ENVEOF'
 ANTHROPIC_API_KEY=DOPLNIT
-DATABASE_URL=postgresql://postgres.fhhgfateuyfxeycfxkgd:fiGcik-mamcem-dimwi2@aws-1-eu-central-1.pooler.supabase.com:5432/postgres
-WEBHOOK_SECRET=df2cc51c7cdabf86b804160d12b10790c5411aec24f8b8379603b1a97745a6b9
+DATABASE_URL=DOPLNIT_postgresql_connection_string
+WEBHOOK_SECRET=DOPLNIT_nahodny_min_32_znaku
 PORT=3001
 ENVEOF
   echo ""
-  echo "⚠️  DOPLŇTE ANTHROPIC_API_KEY v souboru $APP_DIR/.env !"
+  echo "⚠️  DOPLŇTE skutečné hodnoty v souboru $APP_DIR/.env !"
+  echo "   - ANTHROPIC_API_KEY"
+  echo "   - DATABASE_URL (připojení k Postgres)"
+  echo "   - WEBHOOK_SECRET (vygenerujte: openssl rand -hex 32)"
   echo "   nano $APP_DIR/.env"
   echo ""
 else
