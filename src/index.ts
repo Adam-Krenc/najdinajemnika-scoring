@@ -3,6 +3,7 @@ import express from "express";
 import cron from "node-cron";
 import { webhookRouter } from "./routes/webhook";
 import { runMonitor } from "./monitor";
+import { recoverStuckApplicants } from "./scoring/recover";
 import { timingSafeEqualStr } from "./lib/secret";
 
 const app = express();
@@ -32,6 +33,20 @@ app.post("/monitor/run", async (req, res) => {
   res.json({ ok: true, message });
 });
 
+// Manuální spuštění scoring recovery sweeperu (test/ops) — chráněno WEBHOOK_SECRET.
+// POST /recover/run?minutes=10  s hlavičkou x-webhook-secret
+app.post("/recover/run", async (req, res) => {
+  const header = req.headers["x-webhook-secret"];
+  const secret = Array.isArray(header) ? header[0] : header;
+  if (!process.env.WEBHOOK_SECRET || !secret || !timingSafeEqualStr(secret, process.env.WEBHOOK_SECRET)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const minutes = req.query.minutes ? parseInt(req.query.minutes as string) : undefined;
+  const summary = await recoverStuckApplicants({ olderThanMinutes: minutes });
+  res.json({ ok: true, ...summary });
+});
+
 // Je v Praze pondělí? (kvůli týdenní připomínce Vapi)
 function isMondayInPrague(): boolean {
   const weekday = new Intl.DateTimeFormat("en-US", {
@@ -52,7 +67,20 @@ cron.schedule(
   { timezone: "Europe/Prague" }
 );
 
+// Scoring recovery sweeper — každých 10 minut (audit P1 + P2).
+// Najde uchazeče uvízlé ve stavu "new" (ztracený trigger / pád procesu) a přescóruje je.
+cron.schedule("*/10 * * * *", () => {
+  recoverStuckApplicants()
+    .then((s) => {
+      if (s.found > 0) {
+        console.log(`[recover] Sweep hotov: nalezeno ${s.found}, zachráněno ${s.scored}, selhalo ${s.failed}`);
+      }
+    })
+    .catch((err) => console.error("[recover] Sweep selhal:", err));
+});
+
 app.listen(PORT, () => {
   console.log(`[scoring] Server běží na portu ${PORT}`);
   console.log("[monitor] Denní kontrola kreditů naplánována na 8:00 Europe/Prague");
+  console.log("[recover] Scoring recovery sweeper naplánován každých 10 minut");
 });

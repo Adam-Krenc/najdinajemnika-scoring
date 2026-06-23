@@ -382,8 +382,11 @@ async function runCeeLookup(
 /**
  * Pokud má uchazeč telefon na předchozího pronajímatele a je pracovní doba,
  * zavolá VAPI outbound call. Jinak nic nedělá (admin může triggernout ručně).
+ *
+ * Exportováno i pro recovery sweeper (`scoring/recover.ts`), aby zachráněný
+ * uchazeč pokračoval v pipeline stejně jako přes živý `/webhook/score`.
  */
-async function triggerReferenceCallIfPossible(applicantId: string) {
+export async function triggerReferenceCallIfPossible(applicantId: string) {
   const applicant = await prisma.applicant.findUnique({
     where: { id: applicantId },
     include: { listing: { select: { street: true, city: true } } },
