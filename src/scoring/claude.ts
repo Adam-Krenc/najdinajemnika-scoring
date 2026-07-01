@@ -31,7 +31,7 @@ export function parseScoringResponse(text: string): ScoringResult {
 
 export async function scoreApplicant(input: ScoringInput): Promise<ScoringResult> {
   const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    model: "claude-sonnet-5",
     max_tokens: 1024,
     system: SCORING_SYSTEM_PROMPT,
     messages: [{ role: "user", content: buildScoringPrompt(input) }],

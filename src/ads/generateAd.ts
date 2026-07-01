@@ -11,7 +11,7 @@ function extractJSON(text: string): string {
 
 export async function generateAd(input: AdInput): Promise<AdResult> {
   const message = await client.messages.create({
-    model: "claude-haiku-4-5",
+    model: "claude-sonnet-5",
     max_tokens: 1024,
     system: AD_SYSTEM_PROMPT,
     messages: [{ role: "user", content: buildAdPrompt(input) }],
