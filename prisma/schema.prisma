@@ -87,6 +87,10 @@ model Applicant {
   ceeResult              String?
   isirResult             String?
   registryCheckedAt      DateTime?
+  // Finální AI verdikt (konec kaskády): ultra_wow | wow | reject
+  finalVerdict           String?
+  finalReason            String?
+  finalJudgedAt          DateTime?
   // Pipeline status
   status                 String    @default("new")
   gdprConsent            Boolean   @default(false)

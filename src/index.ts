@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cron from "node-cron";
-import { webhookRouter } from "./routes/webhook";
+import { webhookRouter, sweepWowBatches } from "./routes/webhook";
 import { runMonitor } from "./monitor";
 import { recoverStuckApplicants } from "./scoring/recover";
 import { timingSafeEqualStr } from "./lib/secret";
@@ -9,7 +9,15 @@ import { timingSafeEqualStr } from "./lib/secret";
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
-app.use(express.json({ limit: "1mb" }));
+app.use(
+  express.json({
+    limit: "1mb",
+    // Zachová syrové tělo pro HMAC ověření webhooků (ElevenLabs post-call).
+    verify: (req, _res, buf) => {
+      (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+    },
+  })
+);
 
 // Health check
 app.get("/health", (_req, res) => {
@@ -77,6 +85,15 @@ cron.schedule("*/10 * * * *", () => {
       }
     })
     .catch((err) => console.error("[recover] Sweep selhal:", err));
+});
+
+// Uvolnění "wow" dávek finalistů — každých 6 hodin zkontroluj 14denní lhůtu.
+cron.schedule("0 */6 * * *", () => {
+  sweepWowBatches()
+    .then((s) => {
+      if (s.listings > 0) console.log(`[finalJudge] Wow sweep: zkontrolováno ${s.listings} listingů`);
+    })
+    .catch((err) => console.error("[finalJudge] Wow sweep selhal:", err));
 });
 
 app.listen(PORT, () => {

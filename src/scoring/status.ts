@@ -3,8 +3,12 @@
  * Čisté funkce — žádné side-effecty, snadno testovatelné.
  */
 
-/** Minimální skóre, při kterém uchazeč postupuje dál (jinak rejected_ai). */
-export const SCORE_THRESHOLD = 50;
+/**
+ * Minimální skóre „velmi atraktivní" — gate 1 kaskády. Jen uchazeči nad tímto
+ * prahem postupují na referenční hovor (drahý krok), ostatní → rejected_ai.
+ * Zvýšeno z 50 na 75, aby reference volala jen na opravdu silné profily.
+ */
+export const SCORE_THRESHOLD = 75;
 
 export type ScoringStatus = "awaiting_reference" | "rejected_ai";
 

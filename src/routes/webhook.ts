@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { createHmac, timingSafeEqual } from "crypto";
 import { PrismaClient } from "@prisma/client";
 import { scoreApplicant } from "../scoring/claude";
 import { determineScoringStatus } from "../scoring/status";
@@ -7,8 +8,11 @@ import { generateAd } from "../ads/generateAd";
 import { lookupIsir } from "../isir/lookup";
 import { sendIsirResults, sendAdminIsirFallback } from "../isir/email";
 import { lookupCee } from "../cee/lookup";
-import { createReferenceCall, isCallHour } from "../reference/vapi";
+import { Resend } from "resend";
+import { createReferenceCall, parsePostCallTranscript } from "../reference/elevenlabs";
+import { isCallHour } from "../reference/callHours";
 import { evaluateReferenceTranscript } from "../reference/evaluate";
+import { judgeFinalist } from "../reference/finalJudge";
 import { generateShortlistPdf } from "../pdf/shortlist";
 import type { ShortlistApplicant } from "../pdf/shortlist";
 
@@ -24,6 +28,42 @@ function verifySecret(req: Request, res: Response): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * Ověří HMAC podpis post-call webhooku z ElevenLabs.
+ * Hlavička: `ElevenLabs-Signature: t=<unix>,v0=<hex hmac>`
+ * Hash = HMAC-SHA256(ELEVENLABS_WEBHOOK_SECRET, `${t}.${rawBody}`).
+ * Vyžaduje syrové tělo (req.rawBody — nastaveno v express.json verify callbacku).
+ */
+function verifyElevenLabsSignature(req: Request): boolean {
+  const secret = process.env.ELEVENLABS_WEBHOOK_SECRET;
+  if (!secret) return false;
+
+  const raw = (req as Request & { rawBody?: Buffer }).rawBody;
+  if (!raw) return false;
+
+  const headerVal = req.headers["elevenlabs-signature"];
+  const sig = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+  if (!sig) return false;
+
+  const parts = Object.fromEntries(
+    sig.split(",").map((kv) => {
+      const [k, v] = kv.split("=");
+      return [k, v];
+    })
+  );
+  const timestamp = parts["t"];
+  const provided = parts["v0"];
+  if (!timestamp || !provided) return false;
+
+  const expected = createHmac("sha256", secret)
+    .update(`${timestamp}.${raw.toString("utf8")}`)
+    .digest("hex");
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // POST /webhook/score — score an applicant
@@ -376,12 +416,12 @@ async function runCeeLookup(
 }
 
 // ---------------------------------------------------------------------------
-// Reference check — VAPI outbound + AI evaluation
+// Reference check — ElevenLabs outbound + AI evaluation
 // ---------------------------------------------------------------------------
 
 /**
  * Pokud má uchazeč telefon na předchozího pronajímatele a je pracovní doba,
- * zavolá VAPI outbound call. Jinak nic nedělá (admin může triggernout ručně).
+ * zavolá ElevenLabs outbound hovor. Jinak nic nedělá (admin může triggernout ručně).
  *
  * Exportováno i pro recovery sweeper (`scoring/recover.ts`), aby zachráněný
  * uchazeč pokračoval v pipeline stejně jako přes živý `/webhook/score`.
@@ -418,7 +458,7 @@ export async function triggerReferenceCallIfPossible(applicantId: string) {
   });
 
   if (!callResult.ok) {
-    console.error(`[reference] VAPI selhal pro ${applicantId}: ${callResult.error}`);
+    console.error(`[reference] ElevenLabs selhal pro ${applicantId}: ${callResult.error}`);
     return;
   }
 
@@ -432,12 +472,12 @@ export async function triggerReferenceCallIfPossible(applicantId: string) {
     },
   });
 
-  console.log(`[reference] ${applicantId} → VAPI callId ${callResult.callId}`);
+  console.log(`[reference] ${applicantId} → ElevenLabs callId ${callResult.callId}`);
 }
 
 /**
  * Zpracuje přepis referenčního hovoru: vyhodnotí Claudem a aktualizuje status.
- * Voláno z main projektu VAPI webhooku přes tento endpoint.
+ * Voláno z main projektu (webhook) přes tento endpoint.
  */
 async function handleReferenceTranscript(params: {
   applicantId: string;
@@ -458,13 +498,22 @@ async function handleReferenceTranscript(params: {
   }
 
   if (noAnswer || !transcript.trim()) {
-    // Volání nebylo zvednuté — zkusit znovu nebo přejít na SMS fallback
+    // Volání nebylo zvednuté — zkusit znovu, po 3 pokusech reference jako MĚKKÝ signál.
     const attempts = applicant.referenceAttempts;
     console.log(`[reference] ${applicantId} — nezvedl (pokus ${attempts}/3)`);
 
     if (attempts >= 3) {
-      // 3 pokusy vyčerpány → SMS fallback (Twilio) pak status reference_unreachable
+      // 3 pokusy vyčerpány → SMS fallback (Twilio), reference označíme jako nedostupnou,
+      // ALE kaskáda pokračuje do registry (reference není tvrdá podmínka — viz design).
       await triggerSmsFallback(applicantId, applicant);
+      await prisma.applicant.update({
+        where: { id: applicantId },
+        data: { referenceStatus: "unreachable", status: "awaiting_registry_check" },
+      });
+      console.log(`[reference] ${applicantId} → reference nedostupná, pokračuji do registry (měkký signál)`);
+      await runApplicantRegistryCheck(applicantId, applicant.name).catch((err) =>
+        console.error(`[reference] Registry po nedostupné referenci selhal ${applicantId}:`, err)
+      );
     }
     // Jinak čekáme — admin nebo cron trigger pro další pokus
     return;
@@ -475,6 +524,7 @@ async function handleReferenceTranscript(params: {
 
   console.log(`[reference] ${applicantId} transcript eval → ${evaluation.result}: ${evaluation.note}`);
 
+  // Negativní reference = tvrdé zastavení kaskády. Pozitivní/neutrální → pokračuj do registry.
   const newStatus =
     evaluation.result === "negative" ? "rejected_reference" : "awaiting_registry_check";
 
@@ -491,17 +541,11 @@ async function handleReferenceTranscript(params: {
 
   console.log(`[reference] ${applicantId} → ${newStatus}`);
 
-  // Pokud přešel do awaiting_registry_check, zkontroluj auto-trigger registrů
+  // Pozitivní/neutrální reference → rovnou spusť registry pro tohoto uchazeče (kaskáda per-uchazeč).
   if (newStatus === "awaiting_registry_check") {
-    const listing = await prisma.applicant.findUnique({
-      where: { id: applicantId },
-      select: { listingId: true },
-    });
-    if (listing?.listingId) {
-      maybeAutoTriggerRegistry(listing.listingId).catch((err) =>
-        console.error(`[reference] Auto-trigger registry chyba ${applicantId}:`, err)
-      );
-    }
+    await runApplicantRegistryCheck(applicantId, applicant.name).catch((err) =>
+      console.error(`[reference] Registry po referenci selhal ${applicantId}:`, err)
+    );
   }
 }
 
@@ -571,7 +615,7 @@ async function triggerSmsFallback(
   }
 }
 
-// POST /webhook/applicant/reference/call — ručně spustí VAPI outbound call
+// POST /webhook/applicant/reference/call — ručně spustí ElevenLabs outbound hovor
 router.post("/applicant/reference/call", async (req: Request, res: Response) => {
   if (!verifySecret(req, res)) return;
 
@@ -621,7 +665,7 @@ router.post("/applicant/reference/call", async (req: Request, res: Response) => 
   });
 
   if (!callResult.ok) {
-    console.error(`[reference/call] VAPI selhal pro ${applicantId}: ${callResult.error}`);
+    console.error(`[reference/call] ElevenLabs selhal pro ${applicantId}: ${callResult.error}`);
     return;
   }
 
@@ -635,7 +679,7 @@ router.post("/applicant/reference/call", async (req: Request, res: Response) => 
     },
   });
 
-  console.log(`[reference/call] ${applicantId} → VAPI callId ${callResult.callId}`);
+  console.log(`[reference/call] ${applicantId} → ElevenLabs callId ${callResult.callId}`);
 });
 
 // POST /webhook/applicant/reference/transcript — přijme přepis z main projektu po skončení hovoru
@@ -675,6 +719,54 @@ router.post("/applicant/reference/transcript", async (req: Request, res: Respons
   );
 });
 
+// POST /webhook/elevenlabs/post-call — post-call webhook z ElevenLabs Conversational AI.
+// ElevenLabs po skončení reference hovoru pošle data hovoru sem. Mapujeme
+// conversation_id → Applicant.referenceCallId a předáme přepis k vyhodnocení.
+// Volitelné HMAC ověření přes ELEVENLABS_WEBHOOK_SECRET (enforce jen když je nastaven,
+// aby se živá linka nerozbila během nastavování na obou stranách).
+router.post("/elevenlabs/post-call", async (req: Request, res: Response) => {
+  if (process.env.ELEVENLABS_WEBHOOK_SECRET && !verifyElevenLabsSignature(req)) {
+    console.warn("[elevenlabs] Neplatný podpis post-call webhooku — odmítnuto");
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  // ElevenLabs obaluje payload do { type, event_timestamp, data: {...} }.
+  const envelope = req.body as { data?: Record<string, unknown> };
+  const payload = (envelope?.data ?? req.body) as {
+    conversation_id?: string;
+    transcript?: Array<{ role?: string; message?: string | null }>;
+    metadata?: { call_duration_secs?: number };
+    status?: string;
+  };
+
+  const conversationId = payload?.conversation_id;
+  if (!conversationId) {
+    res.status(400).json({ error: "Chybí conversation_id" });
+    return;
+  }
+
+  const applicant = await prisma.applicant
+    .findFirst({ where: { referenceCallId: conversationId } })
+    .catch(() => null);
+
+  if (!applicant) {
+    res.status(404).json({ error: `Žádný uchazeč s referenceCallId = ${conversationId}` });
+    return;
+  }
+
+  res.json({ ok: true });
+
+  const { transcript, noAnswer } = parsePostCallTranscript(payload);
+
+  handleReferenceTranscript({
+    applicantId: applicant.id,
+    callId: conversationId,
+    transcript,
+    noAnswer,
+  }).catch((err) => console.error(`[elevenlabs/post-call] Chyba ${applicant.id}:`, err));
+});
+
 // ---------------------------------------------------------------------------
 // Applicant registry check (CEE + ISIR) — nový Applicant pipeline flow
 // ---------------------------------------------------------------------------
@@ -701,6 +793,180 @@ async function runApplicantRegistryCheck(applicantId: string, tenantName: string
   });
 
   console.log(`[applicant/registry] ${applicantId} → registry_check_done`);
+
+  // Konec kaskády → finální AI soudce rozhodne ultra_wow / wow / reject.
+  await judgeAndRouteFinalist(applicantId).catch((err) =>
+    console.error(`[finalJudge] Směrování finalisty selhalo ${applicantId}:`, err)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Finální AI soudce + doručení finalistů (konec kaskády)
+// ---------------------------------------------------------------------------
+
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "obchod@smartapky.cz";
+const ADMIN_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://www.najdinajemnika.cz";
+const WOW_BATCH_SIZE = 3; // dávka "wow" se uvolní při tomto počtu...
+const WOW_MAX_WAIT_DAYS = 14; // ...nebo po tolika dnech od prvního wow.
+
+/**
+ * Spustí finálního AI soudce nad kompletním profilem uchazeče a podle verdiktu
+ * ho nasměruje: ultra_wow → ihned k adminovi (finalist_ready), wow → do dávky
+ * (finalist_wow), reject → rejected_final.
+ */
+async function judgeAndRouteFinalist(applicantId: string) {
+  const a = await prisma.applicant.findUnique({
+    where: { id: applicantId },
+    include: { listing: { select: { rent: true, city: true } } },
+  });
+  if (!a) return;
+
+  const referenceReachable = a.referenceStatus === "done";
+
+  const judgement = await judgeFinalist({
+    name: a.name,
+    score: a.score,
+    scoringReason: a.scoringReason,
+    aiNote: a.aiNote,
+    income: a.income,
+    employment: a.employment,
+    personsCount: a.personsCount,
+    hasPets: a.hasPets,
+    pets: a.pets,
+    moveReason: a.moveReason,
+    additionalComment: a.additionalComment,
+    hasExecutions: a.hasExecutions,
+    hasInsolvency: a.hasInsolvency,
+    referenceResult: a.referenceResult,
+    referenceNote: a.referenceNote,
+    referenceReachable,
+    isirResult: a.isirResult,
+    ceeResult: a.ceeResult,
+    rent: a.listing?.rent ?? null,
+    city: a.listing?.city ?? null,
+  });
+
+  const status =
+    judgement.verdict === "reject"
+      ? "rejected_final"
+      : judgement.verdict === "ultra_wow"
+      ? "finalist_ready" // ultra-wow jde k adminovi okamžitě
+      : "finalist_wow"; // wow čeká na dávku
+
+  await prisma.applicant.update({
+    where: { id: applicantId },
+    data: {
+      finalVerdict: judgement.verdict,
+      finalReason: judgement.reason,
+      finalJudgedAt: new Date(),
+      status,
+    },
+  });
+
+  console.log(`[finalJudge] ${applicantId} → ${judgement.verdict} → ${status} (${judgement.reason})`);
+
+  if (judgement.verdict === "ultra_wow") {
+    await notifyAdminFinalists(a.listingId, "ultra_wow").catch((err) =>
+      console.error(`[finalJudge] Admin notify (ultra) selhal ${applicantId}:`, err)
+    );
+  } else if (judgement.verdict === "wow") {
+    await maybeReleaseWowBatch(a.listingId).catch((err) =>
+      console.error(`[finalJudge] Uvolnění dávky selhalo ${a.listingId}:`, err)
+    );
+  }
+}
+
+/**
+ * Uvolní dávku "wow" finalistů pro daný listing, pokud je jich dost (WOW_BATCH_SIZE)
+ * nebo od prvního wow uplynulo příliš dní (WOW_MAX_WAIT_DAYS). Exportováno kvůli cronu.
+ */
+export async function maybeReleaseWowBatch(listingId: string) {
+  const wowList = await prisma.applicant.findMany({
+    where: { listingId, status: "finalist_wow" },
+    select: { id: true, finalJudgedAt: true },
+    orderBy: { finalJudgedAt: "asc" },
+  });
+
+  if (wowList.length === 0) return;
+
+  const oldest = wowList[0].finalJudgedAt;
+  const ageDays = oldest ? (Date.now() - oldest.getTime()) / 86_400_000 : 0;
+  const release = wowList.length >= WOW_BATCH_SIZE || ageDays >= WOW_MAX_WAIT_DAYS;
+  if (!release) return;
+
+  await prisma.applicant.updateMany({
+    where: { listingId, status: "finalist_wow" },
+    data: { status: "finalist_ready" },
+  });
+
+  console.log(
+    `[finalJudge] Listing ${listingId}: uvolněna dávka ${wowList.length} wow finalistů (stáří ${ageDays.toFixed(1)} dní)`
+  );
+
+  await notifyAdminFinalists(listingId, "wow").catch((err) =>
+    console.error(`[finalJudge] Admin notify (dávka) selhal ${listingId}:`, err)
+  );
+}
+
+/**
+ * Projde všechny listingy s čekajícími "wow" finalisty a uvolní ty, kterým vypršela
+ * 14denní lhůta (nebo nasbírali dávku). Volá se z cronu v index.ts.
+ */
+export async function sweepWowBatches(): Promise<{ listings: number }> {
+  const rows = await prisma.applicant.findMany({
+    where: { status: "finalist_wow" },
+    select: { listingId: true },
+    distinct: ["listingId"],
+  });
+  for (const r of rows) {
+    await maybeReleaseWowBatch(r.listingId).catch((err) =>
+      console.error(`[finalJudge] sweep wow dávky selhal ${r.listingId}:`, err)
+    );
+  }
+  return { listings: rows.length };
+}
+
+const finalistResend = new Resend(process.env.RESEND_API_KEY);
+
+/** Pošle adminovi notifikaci, že pro listing jsou připravení finalisté k náhledu a shortlistu. */
+async function notifyAdminFinalists(listingId: string, kind: "ultra_wow" | "wow") {
+  const ready = await prisma.applicant.findMany({
+    where: { listingId, status: "finalist_ready" },
+    select: { name: true, finalVerdict: true, finalReason: true },
+  });
+  if (ready.length === 0) return;
+
+  const listing = await prisma.applicant.findFirst({
+    where: { listingId },
+    select: { listing: { select: { street: true, city: true } } },
+  });
+  const addr = [listing?.listing?.street, listing?.listing?.city].filter(Boolean).join(", ");
+  const label = kind === "ultra_wow" ? "ULTRA WOW (okamžitě)" : "WOW dávka";
+  const adminUrl = `${ADMIN_BASE_URL}/admin`;
+
+  const rows = ready
+    .map(
+      (r) =>
+        `<li><strong>${r.name}</strong> — ${r.finalVerdict ?? ""}: ${r.finalReason ?? ""}</li>`
+    )
+    .join("");
+
+  await finalistResend.emails.send({
+    from: "NajdiNájemníka.cz <obchod@smartapky.cz>",
+    to: ADMIN_EMAIL,
+    subject: `[Finalisté – ${label}] ${addr || listingId}`,
+    html: `
+      <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+        <h2 style="color:#1a56db;">Připravení finalisté k náhledu</h2>
+        <p>Pro byt <strong>${addr || listingId}</strong> jsou prověření finalisté (${label}):</p>
+        <ul>${rows}</ul>
+        <p style="margin-top:16px;">Zkontrolujte v adminu a spusťte platbu shortlistu majiteli:</p>
+        <p><a href="${adminUrl}" style="color:#1a56db;">Otevřít admin →</a></p>
+      </div>
+    `,
+  });
+
+  console.log(`[finalJudge] Admin notifikován (${kind}) pro listing ${listingId}: ${ready.length} finalistů`);
 }
 
 /**
@@ -834,7 +1100,7 @@ router.post("/listing/shortlist-pdf", async (req: Request, res: Response) => {
       include: {
         owner: { select: { name: true, email: true } },
         applicants: {
-          where: { status: { in: ["shortlisted", "registry_check_done"] } },
+          where: { status: { in: ["finalist_ready", "shortlisted", "registry_check_done"] } },
           orderBy: { score: "desc" },
           take: 5,
         },

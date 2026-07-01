@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isWithinCallHours } from "../reference/vapi";
+import { isWithinCallHours } from "../reference/callHours";
 
 test("9:00 je uvnitř okna (dolní hranice)", () => {
   assert.equal(isWithinCallHours(9), true);
