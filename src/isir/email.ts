@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { escapeHtml } from "../lib/html";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://www.najdinajemnika.cz";
 
@@ -18,7 +19,11 @@ export async function sendIsirResults(params: {
   note?: string | null;
   packageLabel: string;
 }) {
-  const { landlordName, landlordEmail, tenantName, isirResult, note, packageLabel } = params;
+  const { landlordEmail, isirResult, packageLabel } = params;
+  // Tělo je HTML → escapujeme uživatelská data; subject je plain-text → raw.
+  const landlordName = escapeHtml(params.landlordName);
+  const tenantName = escapeHtml(params.tenantName);
+  const note = params.note ? escapeHtml(params.note) : params.note;
   const label = RESULT_LABELS[isirResult] ?? isirResult;
 
   const badge =
@@ -31,7 +36,7 @@ export async function sendIsirResults(params: {
   await resend.emails.send({
     from: "NajdiNájemníka.cz <obchod@smartapky.cz>",
     to: landlordEmail,
-    subject: `Výsledky prověření nájemníka ${tenantName} – NajdiNájemníka.cz`,
+    subject: `Výsledky prověření nájemníka ${params.tenantName} – NajdiNájemníka.cz`,
     html: `
       <div style="font-family: Inter, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
         <h1 style="color: #1a56db; font-size: 24px; margin-bottom: 8px;">Výsledky prověření</h1>
@@ -65,13 +70,18 @@ export async function sendAdminIsirFallback(params: {
   packageLabel: string;
   isirNote?: string;
 }) {
-  const { verificationId, landlordName, landlordEmail, tenantName, tenantEmail, packageLabel, isirNote } = params;
+  const { verificationId, landlordEmail, packageLabel } = params;
+  // Tělo je HTML → escapujeme uživatelská data; subject je plain-text → raw.
+  const landlordName = escapeHtml(params.landlordName);
+  const tenantName = escapeHtml(params.tenantName);
+  const tenantEmail = escapeHtml(params.tenantEmail);
+  const isirNote = params.isirNote ? escapeHtml(params.isirNote) : params.isirNote;
   const adminUrl = `${BASE_URL}/admin/verifications/${verificationId}`;
 
   await resend.emails.send({
     from: "NajdiNájemníka.cz <obchod@smartapky.cz>",
     to: "obchod@smartapky.cz",
-    subject: `[Ověření – ISIR ruční] ${tenantName}`,
+    subject: `[Ověření – ISIR ruční] ${params.tenantName}`,
     html: `
       <div style="font-family: Inter, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
         <h1 style="color: #1a56db; font-size: 20px;">Ověření ke zpracování (ISIR nedostupný automaticky)</h1>

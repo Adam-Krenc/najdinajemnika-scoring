@@ -9,6 +9,18 @@ import { timingSafeEqualStr } from "./lib/secret";
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
+// Neprozrazovat běhové prostředí (Express) — fingerprinting útočníkům.
+app.disable("x-powered-by");
+
+// Bezpečnostní HTTP hlavičky pro všechny odpovědi (NIS2 hardening).
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  next();
+});
+
 app.use(
   express.json({
     limit: "1mb",
@@ -18,6 +30,30 @@ app.use(
     },
   })
 );
+
+// Jednoduchý in-memory rate limiter (per IP) — ztěžuje brute-force WEBHOOK_SECRET
+// a hromadné zneužití endpointů. Tvrdou ochranu řešte na úrovni reverse proxy.
+const RL_WINDOW_MS = 60_000;
+const RL_MAX = 120;
+const rlBuckets = new Map<string, { count: number; resetAt: number }>();
+app.use((req, res, next) => {
+  const ip =
+    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() ??
+    req.socket.remoteAddress ??
+    "unknown";
+  const now = Date.now();
+  const entry = rlBuckets.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rlBuckets.set(ip, { count: 1, resetAt: now + RL_WINDOW_MS });
+  } else {
+    entry.count += 1;
+    if (entry.count > RL_MAX) {
+      res.status(429).json({ error: "Too many requests" });
+      return;
+    }
+  }
+  next();
+});
 
 // Health check
 app.get("/health", (_req, res) => {
